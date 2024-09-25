@@ -1,0 +1,10 @@
+*
+*.*
+
+!.gitignore
+!.gitmodules
+
+!*.py
+!*.qml
+!*.txt
+!*.pyproject
