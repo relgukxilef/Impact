@@ -8,8 +8,8 @@ import tempfile
 
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
-from PySide6.QtCore import QObject, QSize, Slot, Property
-from PySide6.QtMultimedia import QVideoFrame, QVideoFrameFormat, QVideoSink
+from PySide6.QtCore import QObject, QSize, Slot, Property, Signal
+from PySide6.QtMultimedia import QVideoFrame, QVideoFrameFormat
 import av
 
 def smpte_timecode(total_seconds):
@@ -25,7 +25,15 @@ should_exit = False
 
 video_sink = None
 
+model = None
+
 class Model(QObject):
+    progress_changed = Signal()
+
+    def __init__(self):
+        super().__init__()
+        self._progress = 1
+
     @Slot(str, QObject)
     def drop(self, path, video_output):
         global video_sink
@@ -34,7 +42,16 @@ class Model(QObject):
         )[1:]
         create_subtitles.semaphore.release()
         video_sink = video_output.property("videoSink")
-        
+        model.set_progress(0)
+
+    def get_progress(self):
+        return self._progress
+    
+    def set_progress(self, value):
+        self._progress = value
+        self.progress_changed.emit()
+    
+    progress = Property(float, get_progress, notify=progress_changed)
 
 def create_subtitles():
     # TODO: using function attributes could cause a race condition
@@ -48,8 +65,11 @@ def create_subtitles():
     video = None
 
     while not should_exit:
-        while video == create_subtitles.next_video:
-            create_subtitles.semaphore.acquire()
+        create_subtitles.semaphore.acquire()
+
+        if video == create_subtitles.next_video:
+            continue
+        
         video = create_subtitles.next_video
 
         segments = model.transcribe(
@@ -101,11 +121,16 @@ def export_videos():
     export_videos.ass = None
     export_videos.video = None
 
+    global should_exit, model
+
     video = None
 
     while not should_exit:
-        while video == export_videos.video:
-            export_videos.semaphore.acquire()
+        export_videos.semaphore.acquire()
+        
+        if video == export_videos.video:
+            continue
+
         video = export_videos.video
         ass = export_videos.ass
 
@@ -135,13 +160,18 @@ def export_videos():
         graph.configure()
 
         #while video == export_videos.video and not should_exit:
-        while True:
+        while not should_exit:
             try:
-                for packet in stream.encode(graph.pull()):
+                frame = graph.pull()
+                for packet in stream.encode(frame):
                     output.mux(packet)
+                model.set_progress(
+                    frame.time / duration.numerator * duration.denominator
+                )
             except (av.BlockingIOError, av.EOFError):
                 break
 
+        model.set_progress(1)
         continue
 
         frame = QVideoFrame(

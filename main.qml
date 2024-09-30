@@ -42,9 +42,36 @@ Window {
         Row {
             height: 32
 
-            Button {
-                text: qsTr("Save")
-            }
+            // TODO: add buttons
         }
+    }
+
+    Rectangle {
+        width: 20
+        height: 20
+        color: accentColor
+
+        anchors.centerIn: parent
+
+        RotationAnimation on rotation {
+            loops: Animation.Infinite
+            easing.type: Easing.InOutQuad
+            from: 0
+            to: 360
+            duration: 1000
+        }
+
+        visible: model.progress == 0
+    }
+
+    Rectangle {
+        width: parent.width * model.progress
+        height: 10
+        color: accentColor
+
+        anchors.verticalCenter: parent.verticalCenter
+        anchors.left: parent.left
+
+        visible: model.progress != 1
     }
 }
