@@ -10,7 +10,10 @@ from PySide6.QtGui import QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtCore import QObject, QSize, Slot, Property, Signal
 from PySide6.QtMultimedia import QVideoFrame, QVideoFrameFormat
+from PySide6.QtWidgets import QFileDialog
 import av
+
+av.logging.set_level(av.logging.VERBOSE)
 
 def smpte_timecode(total_seconds):
     hours, total_seconds = divmod(total_seconds, 3600)
@@ -33,9 +36,12 @@ class Model(QObject):
     def __init__(self):
         super().__init__()
         self._progress = 1
+        #self.file_dialog = QFileDialog(self)
 
     @Slot(str, QObject)
     def drop(self, path, video_output):
+        #self.file_dialog.open(self, lambda file: )
+
         global video_sink
         create_subtitles.next_video = urllib.parse.unquote(
             urllib.parse.urlparse(path).path
@@ -141,17 +147,20 @@ def export_videos():
         frame_rate = video_stream.average_rate
         duration = video_stream.duration * video_stream.time_base
 
-        output = av.open("output.webm", mode="w")
-        stream = output.add_stream("vp9")
+        output = av.open("output.mov", mode="w")
+        stream = output.add_stream("qtrle")
+        stream.pix_fmt = "argb"
+        stream.time_base = video_stream.time_base
         
         graph = av.filter.Graph()
         filters = [
             graph.add(
-               "color", color="0x00000000", size=f"{width}x{height}", 
+               "color", color="white@0.0", size=f"{width}x{height}", 
                 rate=f"{frame_rate}", 
                 duration=f"{duration.numerator / duration.denominator}",
             ),
-            graph.add("subtitles", filename=ass.name),
+            graph.add("format", "argb"),
+            graph.add("subtitles", filename=ass.name, alpha="1"),
             graph.add("buffersink"),
         ]
         for filter in zip(filters[:-1], filters[1:]):
@@ -159,17 +168,20 @@ def export_videos():
         
         graph.configure()
 
-        #while video == export_videos.video and not should_exit:
         while not should_exit:
             try:
                 frame = graph.pull()
-                for packet in stream.encode(frame):
-                    output.mux(packet)
+                packets = stream.encode(frame)
+                output.mux(packets)
                 model.set_progress(
                     frame.time / duration.numerator * duration.denominator
                 )
             except (av.BlockingIOError, av.EOFError):
                 break
+
+        for packet in stream.encode(None):
+            output.mux(packet)
+        output.close()
 
         model.set_progress(1)
         continue
@@ -208,6 +220,7 @@ if __name__ == "__main__":
     engine.load(qml_file)
     if not engine.rootObjects():
         sys.exit(-1)
+    
     result = app.exec()
 
     should_exit = True
