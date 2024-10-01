@@ -66,7 +66,7 @@ def create_subtitles():
     global should_exit
 
     import whisper
-    model = whisper.load_model("tiny")#"small")
+    model = whisper.load_model("small")
 
     video = None
 
@@ -84,12 +84,19 @@ def create_subtitles():
 
         ass = tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False)
 
+        file = av.open(video)
+        video_stream = file.streams.video[0]
+        width = video_stream.width
+        height = video_stream.height
+
         ass.write(
             "[Script Info]\n"
             "Title: assa-sample\n"
             "ScriptType: v4.00+\n"
             "PlayDepth: 0\n"
             "ScaledBorderAndShadow: Yes\n"
+            "PlayResX: 384\n"
+            f"PlayResY: {384*height//width}\n"
             "\n"
             "[V4+ Styles]\n"
             "Format: Name, Fontname, Fontsize, PrimaryColour, "
@@ -145,10 +152,12 @@ def export_videos():
         width = video_stream.width
         height = video_stream.height
         frame_rate = video_stream.average_rate
-        duration = video_stream.duration * video_stream.time_base
+        duration = file.duration * 1e-6
 
         output = av.open("output.mov", mode="w")
         stream = output.add_stream("qtrle")
+        stream.codec_context.width = width
+        stream.codec_context.height = height
         stream.pix_fmt = "argb"
         stream.time_base = video_stream.time_base
         
@@ -157,7 +166,7 @@ def export_videos():
             graph.add(
                "color", color="white@0.0", size=f"{width}x{height}", 
                 rate=f"{frame_rate}", 
-                duration=f"{duration.numerator / duration.denominator}",
+                duration=f"{duration}",
             ),
             graph.add("format", "argb"),
             graph.add("subtitles", filename=ass.name, alpha="1"),
@@ -174,7 +183,7 @@ def export_videos():
                 packets = stream.encode(frame)
                 output.mux(packets)
                 model.set_progress(
-                    frame.time / duration.numerator * duration.denominator
+                    frame.time / duration
                 )
             except (av.BlockingIOError, av.EOFError):
                 break
