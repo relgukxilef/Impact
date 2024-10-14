@@ -1,4 +1,8 @@
 # This Python file uses the following encoding: utf-8
+
+# create binary: 
+#.\.venv\Scripts\pyinstaller.exe .\main.py --add-data main.qml:. --add-data .\whisper\whisper\assets\*:whisper\assets --add-binary ".\.venv\Lib\site-packages\torch\lib\torch_python.dll:torch\lib" --noconfirm
+
 import sys
 from pathlib import Path
 from threading import Thread, Semaphore
@@ -11,9 +15,7 @@ from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtCore import QObject, QSize, Slot, Property, Signal
 from PySide6.QtMultimedia import QVideoFrame, QVideoFrameFormat
 from PySide6.QtWidgets import QFileDialog
-import av
-
-av.logging.set_level(av.logging.VERBOSE)
+import numpy
 
 def smpte_timecode(total_seconds):
     hours, total_seconds = divmod(total_seconds, 3600)
@@ -64,8 +66,10 @@ def create_subtitles():
     create_subtitles.semaphore = Semaphore(0)
     create_subtitles.next_video = None
     global should_exit
-
+    
     import whisper
+    import av
+
     model = whisper.load_model("small")
 
     video = None
@@ -78,8 +82,29 @@ def create_subtitles():
         
         video = create_subtitles.next_video
 
+        samples = []
+        input = av.open(video)
+        input_stream = input.streams.audio[0]
+        graph = av.filter.Graph()
+        filters = [
+            graph.add_abuffer(template=input_stream),
+            graph.add("aformat", channel_layouts="mono"),
+            graph.add("aresample", "16000"),
+            graph.add("abuffersink"),
+        ]
+        for filter in zip(filters[:-1], filters[1:]):
+            filter[0].link_to(filter[1])
+        
+        graph.configure()
+
+        for frame in input.decode(input_stream):
+            graph.push(frame)
+            samples.append(graph.pull().to_ndarray())
+
+        samples = numpy.concatenate(samples, 1)[0]
+
         segments = model.transcribe(
-            video, verbose=False, word_timestamps=True
+            samples, verbose=False, word_timestamps=True
         )["segments"]
 
         ass = tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False)
@@ -104,7 +129,7 @@ def create_subtitles():
             "Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, "
             "BorderStyle, Outline, Shadow, "
             "Alignment, MarginL, MarginR, MarginV, Encoding\n"
-            "Style: Default,Arial,80,&H00FFFFFF,&H0000FFFF,&H00000000,"
+            "Style: Default,Arial,40,&H00FFFFFF,&H0000FFFF,&H00000000,"
             "&H00000000,"
             "0,0,0,0,100,100,0,0,1,1,1,5,10,10,10,1\n"
             "\n"
@@ -133,6 +158,8 @@ def export_videos():
     export_videos.semaphore = Semaphore(0)
     export_videos.ass = None
     export_videos.video = None
+    
+    import av
 
     global should_exit, model
 
