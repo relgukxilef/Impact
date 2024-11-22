@@ -34,10 +34,12 @@ model = None
 
 class Model(QObject):
     progress_changed = Signal()
+    label_changed = Signal()
 
     def __init__(self):
         super().__init__()
         self._progress = 1
+        self._label = "Drop a video file here."
         #self.file_dialog = QFileDialog(self)
 
     @Slot(str, QObject)
@@ -50,7 +52,8 @@ class Model(QObject):
         )[1:]
         create_subtitles.semaphore.release()
         video_sink = video_output.property("videoSink")
-        model.set_progress(0)
+        self.set_progress(0)
+        self.set_label("")
 
     def get_progress(self):
         return self._progress
@@ -58,8 +61,16 @@ class Model(QObject):
     def set_progress(self, value):
         self._progress = value
         self.progress_changed.emit()
+
+    def get_label(self):
+        return self._label
+    
+    def set_label(self, value):
+        self._label = value
+        self.label_changed.emit()
     
     progress = Property(float, get_progress, notify=progress_changed)
+    label = Property(str, get_label, notify=label_changed)
 
 def create_subtitles():
     # TODO: using function attributes could cause a race condition
@@ -70,7 +81,7 @@ def create_subtitles():
     import whisper
     import av
 
-    model = whisper.load_model("small")
+    ai = whisper.load_model("small")
 
     video = None
 
@@ -80,79 +91,86 @@ def create_subtitles():
         if video == create_subtitles.next_video:
             continue
         
-        video = create_subtitles.next_video
+        try:
+            video = create_subtitles.next_video
 
-        samples = []
-        input = av.open(video)
-        input_stream = input.streams.audio[0]
-        graph = av.filter.Graph()
-        filters = [
-            graph.add_abuffer(template=input_stream),
-            graph.add("aformat", channel_layouts="mono"),
-            graph.add("aresample", "16000"),
-            graph.add("abuffersink"),
-        ]
-        for filter in zip(filters[:-1], filters[1:]):
-            filter[0].link_to(filter[1])
-        
-        graph.configure()
+            samples = []
+            input = av.open(video)
+            input_stream = input.streams.audio[0]
+            graph = av.filter.Graph()
+            filters = [
+                graph.add_abuffer(template=input_stream),
+                graph.add("aformat", channel_layouts="mono"),
+                graph.add("aresample", "16000"),
+                graph.add("abuffersink"),
+            ]
+            for filter in zip(filters[:-1], filters[1:]):
+                filter[0].link_to(filter[1])
+            
+            graph.configure()
 
-        for frame in input.decode(input_stream):
-            graph.push(frame)
-            samples.append(graph.pull().to_ndarray())
+            for frame in input.decode(input_stream):
+                graph.push(frame)
+                samples.append(graph.pull().to_ndarray())
 
-        samples = numpy.concatenate(samples, 1)[0]
+            samples = numpy.concatenate(samples, 1)[0]
 
-        segments = model.transcribe(
-            samples, verbose=False, word_timestamps=True
-        )["segments"]
+            segments = ai.transcribe(
+                samples, verbose=False, word_timestamps=True
+            )["segments"]
 
-        ass = tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False)
+            ass = tempfile.NamedTemporaryFile(
+                "w", encoding="utf-8", delete=False
+            )
 
-        file = av.open(video)
-        video_stream = file.streams.video[0]
-        width = video_stream.width
-        height = video_stream.height
+            file = av.open(video)
+            video_stream = file.streams.video[0]
+            width = video_stream.width
+            height = video_stream.height
 
-        ass.write(
-            "[Script Info]\n"
-            "Title: assa-sample\n"
-            "ScriptType: v4.00+\n"
-            "PlayDepth: 0\n"
-            "ScaledBorderAndShadow: Yes\n"
-            "PlayResX: 384\n"
-            f"PlayResY: {384*height//width}\n"
-            "\n"
-            "[V4+ Styles]\n"
-            "Format: Name, Fontname, Fontsize, PrimaryColour, "
-            "SecondaryColour, OutlineColour, BackColour, Bold, Italic, "
-            "Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, "
-            "BorderStyle, Outline, Shadow, "
-            "Alignment, MarginL, MarginR, MarginV, Encoding\n"
-            "Style: Default,Arial,40,&H00FFFFFF,&H0000FFFF,&H00000000,"
-            "&H00000000,"
-            "0,0,0,0,100,100,0,0,1,1,1,5,10,10,10,1\n"
-            "\n"
-            "[Events]\n"
-            "Format: Layer, Start, End, Style, Name, MarginL, MarginR, "
-            "MarginV, Effect, Text\n"
-        )
+            ass.write(
+                "[Script Info]\n"
+                "Title: assa-sample\n"
+                "ScriptType: v4.00+\n"
+                "PlayDepth: 0\n"
+                "ScaledBorderAndShadow: Yes\n"
+                "PlayResX: 384\n"
+                f"PlayResY: {384*height//width}\n"
+                "\n"
+                "[V4+ Styles]\n"
+                "Format: Name, Fontname, Fontsize, PrimaryColour, "
+                "SecondaryColour, OutlineColour, BackColour, Bold, Italic, "
+                "Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, "
+                "BorderStyle, Outline, Shadow, "
+                "Alignment, MarginL, MarginR, MarginV, Encoding\n"
+                "Style: Default,Alegreya Sans SC ExtraBold,40,&H00FFFFFF,"
+                "&H0000FFFF,&H00000000,"
+                "&H00000000,"
+                "0,0,0,0,100,100,0,0,1,1,1,5,10,10,10,1\n"
+                "\n"
+                "[Events]\n"
+                "Format: Layer, Start, End, Style, Name, MarginL, MarginR, "
+                "MarginV, Effect, Text\n"
+            )
 
-        for segment in segments:
-            for word in segment["words"]:
-                start = smpte_timecode(word["start"])
-                end = smpte_timecode(word["end"])
-                text = word["word"].strip()
-                ass.write(
-                    f"Dialogue: 0,{start},{end},Default,,0,0,0,,{text}\n"
-                )
+            for segment in segments:
+                for word in segment["words"]:
+                    start = smpte_timecode(word["start"])
+                    end = smpte_timecode(word["end"])
+                    text = word["word"].strip()
+                    ass.write(
+                        f"Dialogue: 0,{start},{end},Default,,0,0,0,,{text}\n"
+                    )
 
-        ass.close()
+            ass.close()
 
-        export_videos.video = video
-        export_videos.ass = ass
-        export_videos.semaphore.release()
+            export_videos.video = video
+            export_videos.ass = ass
+            export_videos.semaphore.release()
 
+        except Exception as e:
+            model.set_label(f"Error: {e}")
+            model.set_progress(1)
 
 def export_videos():
     export_videos.semaphore = Semaphore(0)

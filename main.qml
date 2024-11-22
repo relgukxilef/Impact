@@ -20,12 +20,11 @@ Window {
         onDropped: (drop) => {
             var file = drop.urls[0]
             model.drop(file, videoOutput)
-            textLabel.visible = false;
         }
 
         Text {
             id: textLabel
-            text: qsTr("Drop a video file here.")
+            text: qsTr(model.label)
             color: "white"
             anchors.centerIn: parent
         }
